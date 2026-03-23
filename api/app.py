@@ -27,7 +27,9 @@ def get_game(game_id):
     
     return {"error": "Game not found"}, 404
 
-
+@app.route("/health")
+def health():
+    return {"status": "API is running"}
 
 
 if __name__ == "__main__":
