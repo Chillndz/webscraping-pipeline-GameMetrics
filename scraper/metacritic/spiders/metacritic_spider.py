@@ -1,266 +1,287 @@
 import scrapy
 import time
+import re
+from scrapy_playwright.page import PageMethod
+
+
+BLOCKED_RESOURCES = {"image", "media", "font", "stylesheet"}
 
 
 class MetacriticSpider(scrapy.Spider):
     """
     Observatoire de la popularité des jeux vidéo — ENSEA AS Data Science
-
-    Collecte les données de jeux vidéo depuis Metacritic :
-    - Toutes les plateformes (PC, PS5, Xbox, Switch, etc.)
-    - Tous les genres disponibles
-    - Jeux sortis en 2024 uniquement
-    - Maximum 300 jeux au total (limite éthique du projet)
-
-    Respecte robots.txt et applique un délai entre les requêtes.
-    User-Agent : ENSEA Educational Project
+    Jeux 2024 uniquement — Maximum 2000 items
+    Plateformes et genres lus dynamiquement depuis les filtres Metacritic
     """
 
     name = "metacritic"
     allowed_domains = ["metacritic.com"]
 
-    # Plateformes ciblées pour l'observatoire multi-plateforme
-    PLATFORMS = ["pc", "ps5", "xbox-series-x", "switch", "ps4", "xbox-one"]
+    MAX_ITEMS = 2000
+    TARGET_YEAR = 2024
+    MAX_PAGES_PER_GENRE = 3
 
-    # ── Limites de scraping ───────────────────────────────────────────────────
-    MAX_ITEMS = 300         
-    TARGET_YEAR = 2024       
-    MAX_PAGES_PER_GENRE = 2 
+    STEALTH_SCRIPT = """
+        Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+        Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3]});
+        window.chrome = {runtime: {}};
+    """
 
-    start_urls = [
-        "https://www.metacritic.com/browse/game/"
-    ]
+    # Page de départ : browse général avec filtres visibles
+    start_urls = ["https://www.metacritic.com/browse/game/?releaseYearMin=2024&releaseYearMax=2024&sortBy=metaScore"]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.items_scraped = 0  
-
-    custom_settings = {
-        "DOWNLOAD_DELAY": 2,               
-        "RANDOMIZE_DOWNLOAD_DELAY": True,  
-        "ROBOTSTXT_OBEY": True,
-        "USER_AGENT": "ENSEA Educational Project - Web Scraping Course",
-        "CONCURRENT_REQUESTS": 1,          
-        "LOG_LEVEL": "INFO",
-        "FEEDS": {
-            "raw_data.json": {
-                "format": "json",
-                "encoding": "utf8",
-                "indent": 2,
-                "overwrite": True,
-            }
-        },
-    }
+        self.items_scraped = 0
 
     # -------------------------------------------------------------------------
-    # ÉTAPE 1 : Page d'accueil → récupérer tous les genres
+    # Helper : requête Playwright
+    # -------------------------------------------------------------------------
+    def playwright_request(self, url, callback, meta=None):
+        _meta = {
+            "playwright": True,
+            "playwright_include_page": False,
+            "playwright_context": "default",
+            "playwright_page_goto_kwargs": {"wait_until": "domcontentloaded"},
+            "playwright_page_methods": [
+                PageMethod("add_init_script", self.STEALTH_SCRIPT),
+                PageMethod("route", "**/*", self._block_resources),
+                PageMethod("wait_for_load_state", "domcontentloaded"),
+            ],
+        }
+        if meta:
+            _meta.update(meta)
+        return scrapy.Request(
+            url=url,
+            callback=callback,
+            meta=_meta,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/123.0.0.0 Safari/537.36"
+                ),
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+            errback=self.errback_handler,
+        )
+
+    async def _block_resources(self, route, request):
+        if request.resource_type in BLOCKED_RESOURCES:
+            await route.abort()
+        else:
+            await route.continue_()
+
+    def errback_handler(self, failure):
+        self.logger.error(f"[ERREUR] {failure.request.url} — {repr(failure.value)[:150]}")
+
+    # -------------------------------------------------------------------------
+    # ÉTAPE 1 : Page de browse → lire plateformes ET genres dynamiquement
     # -------------------------------------------------------------------------
     def parse(self, response):
         """
-        Point d'entrée : extrait la liste des genres disponibles
-        et génère une requête par genre x plateforme.
+        Lit les plateformes et genres directement depuis les filtres
+        latéraux de Metacritic (labels dans div[data-slot='wrapper']).
+        Structure HTML vérifiée :
+          <h4>Platforms</h4>
+          <div data-slot="wrapper"><label for="Mobile">Mobile</label>
+          <div data-slot="wrapper"><label for="PC">PC</label>
+          ...
+          <h4>Genres</h4>
+          <div data-slot="wrapper"><label for="Action">Action</label>
+          ...
         """
-        # Les genres sont listés dans la sidebar de navigation
-        genres = response.css("ul.genres-list li a::attr(href)").getall()
+        # Trouver toutes les sections de filtre (Platforms, Genres, etc.)
+        sections = response.css("div.border-t.border-gray-400")
 
+        platforms = []
+        genres = []
+        current_section = None
+
+        for section in sections:
+            # Identifier la section par le titre <h4>
+            header = section.css("h4::text").get(default="").strip()
+
+            if "Platform" in header:
+                current_section = "platforms"
+                labels = section.css("div[data-slot='wrapper'] label::text").getall()
+                platforms = [l.strip() for l in labels if l.strip()]
+
+            elif "Genre" in header:
+                current_section = "genres"
+                labels = section.css("div[data-slot='wrapper'] label::text").getall()
+                genres = [l.strip() for l in labels if l.strip()]
+
+        # Fallbacks si la lecture dynamique échoue
+        if not platforms:
+            platforms = ["pc", "ps5", "ps4", "xbox-series-x", "xbox-one",
+                        "switch", "mobile", "ios", "android"]
+            self.logger.warning("[PARSE] Plateformes non trouvées — utilisation du fallback")
         if not genres:
-            # Fallback : liste de genres connus si la navigation change
-            genres = [
-                "action", "adventure", "rpg", "shooter", "strategy",
-                "sports", "racing", "simulation", "puzzle", "fighting",
-                "platformer", "horror"
-            ]
-            genre_slugs = genres
-        else:
-            # Extraire le slug depuis l'URL (ex: /browse/game/action/ → action)
-            genre_slugs = [g.strip("/").split("/")[-1] for g in genres]
+            genres = ["action", "adventure", "rpg", "shooter", "strategy",
+                     "sports", "racing", "simulation", "puzzle", "fighting",
+                     "platformer", "horror"]
+            self.logger.warning("[PARSE] Genres non trouvés — utilisation du fallback")
 
-        self.logger.info(f"[GENRES] {len(genre_slugs)} genres trouvés : {genre_slugs}")
+        # Convertir les labels en slugs URL (ex: "Xbox Series X" → "xbox-series-x")
+        platform_slugs = [self._to_slug(p) for p in platforms]
+        genre_slugs    = [self._to_slug(g) for g in genres]
 
-        for platform in self.PLATFORMS:
+        self.logger.info(f"[PLATEFORMES] {len(platform_slugs)} : {platform_slugs}")
+        self.logger.info(f"[GENRES] {len(genre_slugs)} : {genre_slugs}")
+
+        for platform in platform_slugs:
             for genre in genre_slugs:
-                # Filtre côté URL : jeux de 2024 uniquement, triés par Metascore
-                url = f"https://www.metacritic.com/browse/game/{platform}/{genre}/?releaseYearMin=2024&releaseYearMax=2024&sortBy=metaScore"
-                yield scrapy.Request(
+                url = (
+                    f"https://www.metacritic.com/browse/game/{platform}/{genre}/"
+                    f"?releaseYearMin=2024&releaseYearMax=2024&sortBy=metaScore"
+                )
+                yield self.playwright_request(
                     url=url,
                     callback=self.parse_genre_page,
                     meta={"platform": platform, "genre": genre, "page": 1},
-                    headers={"User-Agent": "ENSEA Educational Project - Web Scraping Course"}
                 )
 
     # -------------------------------------------------------------------------
-    # ÉTAPE 2 : Page de liste d'un genre → récupérer les liens de jeux
+    # ÉTAPE 2 : Page de liste → liens de jeux
     # -------------------------------------------------------------------------
     def parse_genre_page(self, response):
-        """
-        Extrait les liens vers les fiches de jeux sur une page de liste.
-        Gère la pagination automatiquement.
-        """
         platform = response.meta["platform"]
-        genre = response.meta["genre"]
-        page = response.meta["page"]
+        genre    = response.meta["genre"]
+        page     = response.meta["page"]
 
-        # Liens vers les fiches individuelles des jeux
-        game_links = response.css("a.title::attr(href)").getall()
-
-        # Fallback sélecteur alternatif
-        if not game_links:
-            game_links = response.css(
-                "div.c-finderProductCard a::attr(href)"
+        game_links = list(dict.fromkeys(
+            l for l in response.css(
+                "div[data-testid='filter-results'] a::attr(href)"
             ).getall()
+            if l.startswith("/game/")
+        ))
 
         self.logger.info(
-            f"[PAGE] Plateforme={platform} | Genre={genre} | Page={page} | {len(game_links)} jeux"
+            f"[PAGE] {platform} | {genre} | page {page} | {len(game_links)} jeux"
         )
 
         for link in game_links:
-            # ── Limite globale : arrêt dès que MAX_ITEMS est atteint ──────────
             if self.items_scraped >= self.MAX_ITEMS:
-                self.logger.info(f"[LIMITE] {self.MAX_ITEMS} jeux atteints — arrêt du scraping.")
+                self.logger.info(f"[LIMITE] {self.MAX_ITEMS} atteints — arrêt.")
                 return
-
-            full_url = response.urljoin(link)
-            yield scrapy.Request(
-                url=full_url,
+            yield self.playwright_request(
+                url=response.urljoin(link),
                 callback=self.parse_game,
                 meta={"platform": platform, "genre": genre},
-                headers={"User-Agent": "ENSEA Educational Project - Web Scraping Course"}
             )
 
-        # --- Pagination : max MAX_PAGES_PER_GENRE pages par genre/plateforme ---
-        next_page = response.css("a.c-navigationPagination_item--next::attr(href)").get()
+        next_page = response.css("a[aria-label='Next page']::attr(href)").get()
         if next_page and page < self.MAX_PAGES_PER_GENRE and self.items_scraped < self.MAX_ITEMS:
-            yield scrapy.Request(
+            yield self.playwright_request(
                 url=response.urljoin(next_page),
                 callback=self.parse_genre_page,
                 meta={"platform": platform, "genre": genre, "page": page + 1},
-                headers={"User-Agent": "ENSEA Educational Project - Web Scraping Course"}
             )
 
     # -------------------------------------------------------------------------
-    # ÉTAPE 3 : Fiche d'un jeu → extraire toutes les données
+    # ÉTAPE 3 : Fiche d'un jeu → extraction avec sélecteurs vérifiés
     # -------------------------------------------------------------------------
     def parse_game(self, response):
-        """
-        Extrait toutes les données d'une fiche jeu Metacritic.
-        Retourne un dictionnaire structuré prêt pour la BDD.
-        """
 
-        def safe_get(css_selector, default="NA"):
-            """Extrait le texte d'un sélecteur CSS, retourne default si absent."""
-            val = response.css(css_selector).get(default="").strip()
+        def safe_get(selector, default="NA"):
+            val = response.css(selector).get(default="").strip()
             return val if val else default
 
-        def safe_get_all(css_selector):
-            """Extrait une liste de textes depuis un sélecteur CSS."""
-            vals = response.css(css_selector).getall()
-            cleaned = [v.strip() for v in vals if v.strip()]
-            return ", ".join(cleaned) if cleaned else "NA"
-
-        # ----- Informations générales -----
-        title = safe_get("h1.c-productHero_title span::text")
+        # Titre
+        title = safe_get("h1[data-testid='product-title'] span:last-child::text")
         if title == "NA":
             title = safe_get("h1::text")
 
+        # Date de sortie
         release_date = safe_get(
-            "div.c-gameDetails_ReleaseDate span.g-outer-spacing-left-medium-fluid::text"
+            "div.c-gameDetails_ReleaseDate span:last-child::text"
+        )
+        if release_date == "NA":
+            for span in response.css("span::text").getall():
+                s = span.strip()
+                if len(s) > 4 and s[-4:].isdigit() and 2020 <= int(s[-4:]) <= 2027:
+                    release_date = s
+                    break
+
+        # Développeur — vérifié image 1 : 2ème li.hero-metadata__item
+        dev_spans = response.css("li.hero-metadata__item span::text").getall()
+        developer = dev_spans[1].strip() if len(dev_spans) >= 2 else (
+            dev_spans[0].strip() if dev_spans else "NA"
         )
 
-        developer = safe_get(
-            "div.c-gameDetails_Developer li.c-gameDetails_listItem span::text"
-        )
-
-        publisher = safe_get_all(
-            "div.c-gameDetails_Distributor span.g-outer-spacing-left-medium-fluid::text"
-        )
-
-        # La plateforme vient de la meta (contexte de navigation)
         platform = response.meta.get("platform", "NA")
+        genre    = response.meta.get("genre", "NA")
 
-        # Rating PEGI / ESRB
-        maturity_rating = safe_get(
-            "div.c-gameDetails_RatingDescriptors span::text"
-        )
+        # Scores — vérifié : 1er = metascore, 2ème = user score
+        score_values = response.css(
+            "span[data-testid='global-score-value']::text"
+        ).getall()
+        metascore  = score_values[0].strip() if len(score_values) >= 1 else "NA"
+        user_score = score_values[1].strip() if len(score_values) >= 2 else "NA"
+        if user_score in ("tbd", "NA", ""):
+            user_score = "NA"
 
-        # Genre principal (depuis la meta de navigation)
-        genre = response.meta.get("genre", "NA")
+        # Nombre de critiques / avis — vérifié images 3 & 4
+        critics_count      = "NA"
+        user_reviews_count = "NA"
+        for link in response.css("a[data-testid='global-score-review-count-link']"):
+            href = link.attrib.get("href", "")
+            text = " ".join(link.css("*::text").getall()).strip()
+            if "critic-reviews" in href:
+                critics_count = text
+            elif "user-reviews" in href:
+                user_reviews_count = text
 
-        # Tags de genre affichés sur la page du jeu
-        genre_tags = safe_get_all(
-            "div.c-gameDetails_Genre li.c-gameDetails_listItem span::text"
-        )
-
-        # ----- Scores -----
-        # Metascore (presse)
-        metascore = safe_get(
-            "div.c-productScoreInfo_scoreNumber span::text"
-        )
-        if metascore == "NA":
-            metascore = safe_get("div.metascore_w span::text")
-
-        # Nombre de critiques presse
-        critics_count = safe_get(
-            "div.c-productScoreInfo_reviewsTotal span::text"
-        )
-
-        # Score utilisateurs
-        user_score = safe_get(
-            "div.c-productUserScoreInfo_scoreNumber span::text"
-        )
-
-        # Nombre d'avis utilisateurs
-        user_reviews_count = safe_get(
-            "div.c-productUserScoreInfo_reviewsTotal span::text"
-        )
-
-        # ----- Filtre année côté spider (double sécurité) -----
-        # Si la date contient une année différente de TARGET_YEAR, on ignore
+        # Filtre année
         if release_date != "NA":
             try:
                 year = int(release_date.strip()[-4:])
                 if year != self.TARGET_YEAR:
-                    self.logger.debug(
-                        f"[FILTRE ANNÉE] {title} ({year}) ignoré — hors 2024"
-                    )
+                    self.logger.debug(f"[FILTRE ANNÉE] {title} ({year}) ignoré")
                     return
             except (ValueError, IndexError):
-                pass  # Date mal formatée → on garde quand même l'item
+                pass
 
-        # ----- Construction de l'item -----
         item = {
-            # Métadonnées
-            "url": response.url,
-            "scraped_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-
-            # Infos générales
-            "title": title,
-            "release_date": release_date,
-            "developer": developer,
-            "publisher": publisher,
-            "platform": platform,
-            "maturity_rating": maturity_rating,
-
-            # Genres
-            "genre": genre,
-            "genre_tags": genre_tags,
-
-            # Scores
-            "metascore": self._parse_score(metascore),
-            "critics_count": self._parse_count(critics_count),
-            "user_score": self._parse_score(user_score),
+            "url":                response.url,
+            "scraped_at":         time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "title":              title,
+            "release_date":       release_date,
+            "developer":          developer,
+            "platform":           platform,
+            "genre":              genre,
+            "metascore":          self._parse_score(metascore),
+            "critics_count":      self._parse_count(critics_count),
+            "user_score":         self._parse_score(user_score),
             "user_reviews_count": self._parse_count(user_reviews_count),
         }
 
-        self.logger.debug(f"[GAME] {title} | {platform} | Metascore={metascore} | UserScore={user_score}")
+        self.logger.info(
+            f"[GAME ✓] {title} | {platform} | {genre} | "
+            f"Metascore={metascore} | User={user_score} | Dev={developer}"
+        )
         self.items_scraped += 1
         yield item
 
     # -------------------------------------------------------------------------
     # UTILITAIRES
     # -------------------------------------------------------------------------
+    def _to_slug(self, label):
+        """Convertit un label Metacritic en slug URL.
+        Ex: 'Xbox Series X' → 'xbox-series-x'
+            'PlayStation 5' → 'playstation-5'
+            'Action'        → 'action'
+        """
+        slug = label.lower().strip()
+        slug = re.sub(r'[^a-z0-9\s-]', '', slug)   # Retire les caractères spéciaux
+        slug = re.sub(r'\s+', '-', slug)             # Espaces → tirets
+        slug = re.sub(r'-+', '-', slug)              # Tirets multiples → 1 seul
+        return slug.strip('-')
+
     def _parse_score(self, value):
-        """Convertit un score en float, retourne None si non disponible."""
-        if value == "NA" or not value:
+        if not value or value == "NA":
             return None
         try:
             return float(value.replace(",", "."))
@@ -268,11 +289,9 @@ class MetacriticSpider(scrapy.Spider):
             return None
 
     def _parse_count(self, value):
-        """Convertit un compteur en int, retourne None si non disponible."""
-        if value == "NA" or not value:
+        if not value or value == "NA":
             return None
         try:
-            # Retire les textes comme "Based on X Ratings" → garde le nombre
             digits = "".join(filter(str.isdigit, value))
             return int(digits) if digits else None
         except (ValueError, AttributeError):

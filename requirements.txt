@@ -6,6 +6,8 @@
 # ── Scraping ──────────────────────────────────────────────────────────────────
 scrapy>=2.11.0
 itemadapter>=0.7.0
+scrapy-playwright>=0.0.40    # Exécution JavaScript dans Scrapy
+scrapy-playwright>=0.0.40    # Exécution JavaScript via Playwright
 
 # ── Nettoyage & Analyse des données ──────────────────────────────────────────
 pandas>=2.2.0

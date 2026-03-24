@@ -1,60 +1,41 @@
 import json
-import logging
 from itemadapter import ItemAdapter
 from scrapy.exceptions import DropItem
 
 
 class DuplicateFilterPipeline:
-    """
-    Filtre les jeux déjà scrapés en se basant sur l'URL.
-    Évite les doublons quand un jeu apparaît dans plusieurs genres.
-    """
+    """Filtre les doublons par URL."""
 
     def __init__(self):
         self.seen_urls = set()
 
     def process_item(self, item, spider):
-        adapter = ItemAdapter(item)
-        url = adapter.get("url")
-
+        url = ItemAdapter(item).get("url")
         if url in self.seen_urls:
-            spider.logger.debug(f"[DUPLICATE] Ignoré : {url}")
-            raise DropItem(f"Doublon ignoré : {url}")
-
+            raise DropItem(f"[DUPLICATE] {url}")
         self.seen_urls.add(url)
         return item
 
 
 class YearFilterPipeline:
-    """
-    Double sécurité : vérifie que le jeu est bien sorti en 2024.
-    Complète le filtre déjà présent dans le spider.
-    """
+    """Double sécurité : garde uniquement les jeux de 2024."""
 
     TARGET_YEAR = 2024
 
     def process_item(self, item, spider):
-        adapter = ItemAdapter(item)
-        release_date = adapter.get("release_date", "NA")
-
+        release_date = ItemAdapter(item).get("release_date", "NA")
         if release_date and release_date != "NA":
             try:
                 year = int(release_date.strip()[-4:])
                 if year != self.TARGET_YEAR:
-                    raise DropItem(
-                        f"[ANNÉE] {adapter.get('title')} ({year}) ignoré — hors {self.TARGET_YEAR}"
-                    )
+                    raise DropItem(f"[ANNÉE] {ItemAdapter(item).get('title')} ({year})")
             except (ValueError, IndexError):
-                pass  # Date mal formatée → on conserve l'item
-
+                pass
         return item
 
 
 class ItemLimitPipeline:
-    """
-    Arrête la collecte après MAX_ITEMS items valides.
-    Dernière ligne de défense contre un dépassement de quota.
-    """
+    """Arrête la collecte après 300 items valides."""
 
     MAX_ITEMS = 300
 
@@ -63,39 +44,41 @@ class ItemLimitPipeline:
 
     def process_item(self, item, spider):
         if self.count >= self.MAX_ITEMS:
-            raise DropItem(
-                f"[LIMITE] Quota de {self.MAX_ITEMS} jeux atteint — item ignoré."
-            )
+            raise DropItem(f"[LIMITE] Quota de {self.MAX_ITEMS} atteint.")
         self.count += 1
         return item
 
 
 class ValidationPipeline:
-    """
-    Vérifie que les champs essentiels sont présents.
-    Rejette les items sans titre.
-    """
+    """Rejette les items sans titre ET sans metascore (données trop vides)."""
 
     def process_item(self, item, spider):
         adapter = ItemAdapter(item)
+        title    = adapter.get("title")
+        meta     = adapter.get("metascore")
 
-        title = adapter.get("title")
         if not title or title == "NA":
-            raise DropItem(
-                f"[VALIDATION] Item sans titre rejeté : {adapter.get('url')}"
-            )
+            raise DropItem(f"[VALIDATION] Sans titre : {adapter.get('url')}")
 
+        if meta is None:
+            spider.logger.warning(
+                f"[WARNING] Metascore manquant pour {title} — item conservé quand même"
+            )
         return item
 
 
 class JsonWriterPipeline:
-    """
-    Écrit les items validés dans raw_data.json de façon incrémentale.
-    Permet de ne pas perdre les données en cas d'interruption.
-    """
+    """Écrit les items dans raw_data.json de façon incrémentale."""
+
+    # Champs dans l'ordre voulu pour le JSON final
+    FIELDS_ORDER = [
+        "title", "release_date", "developer", "platform", "genre",
+        "metascore", "critics_count", "user_score", "user_reviews_count",
+        "url", "scraped_at",
+    ]
 
     def open_spider(self, spider):
-        self.file = open("raw_data.json", "w", encoding="utf-8")
+        self.file = open("../data/raw_data.json", "w", encoding="utf-8")
         self.file.write("[\n")
         self.first_item = True
         self.count = 0
@@ -107,12 +90,13 @@ class JsonWriterPipeline:
 
     def process_item(self, item, spider):
         adapter = ItemAdapter(item)
-        line = json.dumps(dict(adapter), ensure_ascii=False, indent=2)
+        # Réordonne les champs pour la lisibilité
+        ordered = {field: adapter.get(field) for field in self.FIELDS_ORDER}
+        line = json.dumps(ordered, ensure_ascii=False, indent=2)
 
         if not self.first_item:
             self.file.write(",\n")
         self.first_item = False
-
         self.file.write(line)
         self.count += 1
         return item
