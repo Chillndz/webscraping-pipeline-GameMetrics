@@ -1,8 +1,6 @@
 import scrapy
 import time
-import re
 from scrapy_playwright.page import PageMethod
-
 
 BLOCKED_RESOURCES = {"image", "media", "font", "stylesheet"}
 
@@ -10,16 +8,38 @@ BLOCKED_RESOURCES = {"image", "media", "font", "stylesheet"}
 class MetacriticSpider(scrapy.Spider):
     """
     Observatoire de la popularité des jeux vidéo — ENSEA AS Data Science
-    Jeux 2024 uniquement — Maximum 2000 items
-    Plateformes et genres lus dynamiquement depuis les filtres Metacritic
+    Jeux 2024-2026 — Maximum 2000 items
+    Reprise automatique activée via JOBDIR dans settings.py
     """
 
     name = "metacritic"
     allowed_domains = ["metacritic.com"]
 
-    MAX_ITEMS = 2000
-    TARGET_YEAR = 2024
-    MAX_PAGES_PER_GENRE = 3
+    MAX_ITEMS           = 2000
+    TARGET_YEAR_MIN     = 2024
+    TARGET_YEAR_MAX     = 2026
+    MAX_PAGES_PER_GENRE = 10
+
+    # Plateformes Metacritic (vérifiées sur le site)
+    PLATFORMS = [
+        "ps5", "xbox-series-x-s", "nintendo-switch-2", "switch", "pc",
+        "mobile", "3ds", "dreamcast", "game-boy-advance", "gamecube",
+        "meta-quest", "nintendo-64", "nintendo-ds", "ps-vita", "ps1",
+        "ps2", "ps3", "ps4", "psp", "wii", "wii-u", "xbox", "xbox-360", "xbox-one",
+    ]
+
+    # Genres Metacritic (vérifiés sur le site)
+    GENRES = [
+        "action", "action-adventure", "action-puzzle", "action-rpg", "adventure",
+        "application", "arcade", "beat-em-up", "board-card-game", "card-battle",
+        "compilation", "edutainment", "exercise-fitness", "fighting",
+        "first-person-shooter", "gambling", "general", "mmorpg", "open-world",
+        "party-minigame", "pinball", "platformer", "puzzle", "racing",
+        "real-time-strategy", "rhythm", "roguelike", "rpg", "sandbox", "shooter",
+        "simulation", "sports", "strategy", "survival", "tactics",
+        "third-person-shooter", "trivia-game-show", "turn-based-strategy",
+        "virtual", "visual-novel",
+    ]
 
     STEALTH_SCRIPT = """
         Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
@@ -27,15 +47,17 @@ class MetacriticSpider(scrapy.Spider):
         window.chrome = {runtime: {}};
     """
 
-    # Page de départ : browse général avec filtres visibles
-    start_urls = ["https://www.metacritic.com/browse/game/?releaseYearMin=2024&releaseYearMax=2024&sortBy=metaScore"]
+    start_urls = [
+        "https://www.metacritic.com/browse/game/"
+        "?releaseYearMin=2024&releaseYearMax=2026&sortBy=metaScore"
+    ]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.items_scraped = 0
 
     # -------------------------------------------------------------------------
-    # Helper : requête Playwright
+    # Helper : requête Playwright avec blocage ressources
     # -------------------------------------------------------------------------
     def playwright_request(self, url, callback, meta=None):
         _meta = {
@@ -62,7 +84,6 @@ class MetacriticSpider(scrapy.Spider):
                     "Chrome/123.0.0.0 Safari/537.36"
                 ),
                 "Accept-Language": "en-US,en;q=0.9",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             },
             errback=self.errback_handler,
         )
@@ -77,65 +98,19 @@ class MetacriticSpider(scrapy.Spider):
         self.logger.error(f"[ERREUR] {failure.request.url} — {repr(failure.value)[:150]}")
 
     # -------------------------------------------------------------------------
-    # ÉTAPE 1 : Page de browse → lire plateformes ET genres dynamiquement
+    # ÉTAPE 1 : Génère toutes les combinaisons plateforme × genre
     # -------------------------------------------------------------------------
     def parse(self, response):
-        """
-        Lit les plateformes et genres directement depuis les filtres
-        latéraux de Metacritic (labels dans div[data-slot='wrapper']).
-        Structure HTML vérifiée :
-          <h4>Platforms</h4>
-          <div data-slot="wrapper"><label for="Mobile">Mobile</label>
-          <div data-slot="wrapper"><label for="PC">PC</label>
-          ...
-          <h4>Genres</h4>
-          <div data-slot="wrapper"><label for="Action">Action</label>
-          ...
-        """
-        # Trouver toutes les sections de filtre (Platforms, Genres, etc.)
-        sections = response.css("div.border-t.border-gray-400")
-
-        platforms = []
-        genres = []
-        current_section = None
-
-        for section in sections:
-            # Identifier la section par le titre <h4>
-            header = section.css("h4::text").get(default="").strip()
-
-            if "Platform" in header:
-                current_section = "platforms"
-                labels = section.css("div[data-slot='wrapper'] label::text").getall()
-                platforms = [l.strip() for l in labels if l.strip()]
-
-            elif "Genre" in header:
-                current_section = "genres"
-                labels = section.css("div[data-slot='wrapper'] label::text").getall()
-                genres = [l.strip() for l in labels if l.strip()]
-
-        # Fallbacks si la lecture dynamique échoue
-        if not platforms:
-            platforms = ["pc", "ps5", "ps4", "xbox-series-x", "xbox-one",
-                        "switch", "mobile", "ios", "android"]
-            self.logger.warning("[PARSE] Plateformes non trouvées — utilisation du fallback")
-        if not genres:
-            genres = ["action", "adventure", "rpg", "shooter", "strategy",
-                     "sports", "racing", "simulation", "puzzle", "fighting",
-                     "platformer", "horror"]
-            self.logger.warning("[PARSE] Genres non trouvés — utilisation du fallback")
-
-        # Convertir les labels en slugs URL (ex: "Xbox Series X" → "xbox-series-x")
-        platform_slugs = [self._to_slug(p) for p in platforms]
-        genre_slugs    = [self._to_slug(g) for g in genres]
-
-        self.logger.info(f"[PLATEFORMES] {len(platform_slugs)} : {platform_slugs}")
-        self.logger.info(f"[GENRES] {len(genre_slugs)} : {genre_slugs}")
-
-        for platform in platform_slugs:
-            for genre in genre_slugs:
+        total = len(self.PLATFORMS) * len(self.GENRES)
+        self.logger.info(
+            f"[START] {len(self.PLATFORMS)} plateformes × "
+            f"{len(self.GENRES)} genres = {total} combinaisons"
+        )
+        for platform in self.PLATFORMS:
+            for genre in self.GENRES:
                 url = (
                     f"https://www.metacritic.com/browse/game/{platform}/{genre}/"
-                    f"?releaseYearMin=2024&releaseYearMax=2024&sortBy=metaScore"
+                    f"?releaseYearMin=2024&releaseYearMax=2026&sortBy=metaScore"
                 )
                 yield self.playwright_request(
                     url=url,
@@ -181,7 +156,7 @@ class MetacriticSpider(scrapy.Spider):
             )
 
     # -------------------------------------------------------------------------
-    # ÉTAPE 3 : Fiche d'un jeu → extraction avec sélecteurs vérifiés
+    # ÉTAPE 3 : Fiche d'un jeu → extraction
     # -------------------------------------------------------------------------
     def parse_game(self, response):
 
@@ -189,23 +164,18 @@ class MetacriticSpider(scrapy.Spider):
             val = response.css(selector).get(default="").strip()
             return val if val else default
 
-        # Titre
         title = safe_get("h1[data-testid='product-title'] span:last-child::text")
         if title == "NA":
             title = safe_get("h1::text")
 
-        # Date de sortie
-        release_date = safe_get(
-            "div.c-gameDetails_ReleaseDate span:last-child::text"
-        )
+        release_date = safe_get("div.c-gameDetails_ReleaseDate span:last-child::text")
         if release_date == "NA":
             for span in response.css("span::text").getall():
                 s = span.strip()
-                if len(s) > 4 and s[-4:].isdigit() and 2020 <= int(s[-4:]) <= 2027:
+                if len(s) > 4 and s[-4:].isdigit() and 2020 <= int(s[-4:]) <= 2030:
                     release_date = s
                     break
 
-        # Développeur — vérifié image 1 : 2ème li.hero-metadata__item
         dev_spans = response.css("li.hero-metadata__item span::text").getall()
         developer = dev_spans[1].strip() if len(dev_spans) >= 2 else (
             dev_spans[0].strip() if dev_spans else "NA"
@@ -214,18 +184,13 @@ class MetacriticSpider(scrapy.Spider):
         platform = response.meta.get("platform", "NA")
         genre    = response.meta.get("genre", "NA")
 
-        # Scores — vérifié : 1er = metascore, 2ème = user score
-        score_values = response.css(
-            "span[data-testid='global-score-value']::text"
-        ).getall()
-        metascore  = score_values[0].strip() if len(score_values) >= 1 else "NA"
+        score_values = response.css("span[data-testid='global-score-value']::text").getall()
+        metascore  = score_values[0].strip() if score_values else "NA"
         user_score = score_values[1].strip() if len(score_values) >= 2 else "NA"
         if user_score in ("tbd", "NA", ""):
             user_score = "NA"
 
-        # Nombre de critiques / avis — vérifié images 3 & 4
-        critics_count      = "NA"
-        user_reviews_count = "NA"
+        critics_count = user_reviews_count = "NA"
         for link in response.css("a[data-testid='global-score-review-count-link']"):
             href = link.attrib.get("href", "")
             text = " ".join(link.css("*::text").getall()).strip()
@@ -234,12 +199,10 @@ class MetacriticSpider(scrapy.Spider):
             elif "user-reviews" in href:
                 user_reviews_count = text
 
-        # Filtre année
         if release_date != "NA":
             try:
                 year = int(release_date.strip()[-4:])
-                if year != self.TARGET_YEAR:
-                    self.logger.debug(f"[FILTRE ANNÉE] {title} ({year}) ignoré")
+                if not (self.TARGET_YEAR_MIN <= year <= self.TARGET_YEAR_MAX):
                     return
             except (ValueError, IndexError):
                 pass
@@ -264,21 +227,6 @@ class MetacriticSpider(scrapy.Spider):
         )
         self.items_scraped += 1
         yield item
-
-    # -------------------------------------------------------------------------
-    # UTILITAIRES
-    # -------------------------------------------------------------------------
-    def _to_slug(self, label):
-        """Convertit un label Metacritic en slug URL.
-        Ex: 'Xbox Series X' → 'xbox-series-x'
-            'PlayStation 5' → 'playstation-5'
-            'Action'        → 'action'
-        """
-        slug = label.lower().strip()
-        slug = re.sub(r'[^a-z0-9\s-]', '', slug)   # Retire les caractères spéciaux
-        slug = re.sub(r'\s+', '-', slug)             # Espaces → tirets
-        slug = re.sub(r'-+', '-', slug)              # Tirets multiples → 1 seul
-        return slug.strip('-')
 
     def _parse_score(self, value):
         if not value or value == "NA":
