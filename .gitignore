@@ -1,47 +1,58 @@
-# Python
+# ===== Python =====
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
-.Python
 *.egg
 *.egg-info/
-dist/
 build/
+dist/
 .eggs/
+
+# Environnements
 venv/
 .venv/
 env/
+ENV/
 
-# Scrapy
-.scrapy/
-.scrapy_jobs/
+# ===== Logs =====
 *.log
 
-# Données (ne pas committer les données brutes)
-data/raw_data.json
-data/clean_data.csv
+# ===== Données (IMPORTANT) =====
+data/
+*.json
+*.csv
 
-# Variables d'environnement
+# ===== Database =====
+database/*.db
+database/*.sqlite3
+
+# (on garde init.sql versionné)
+!database/init.sql
+
+# ===== Variables d'environnement =====
 .env
+.env.*
 
-# Docker
+# ===== Scrapy =====
+.scrapy/
+.scrapy_jobs/
+
+# ===== Docker =====
 .docker/
 
-# IDE
+# ===== IDE =====
 .vscode/
 .idea/
-*.swp
-*.swo
 
-# OS
+# ===== OS =====
 .DS_Store
 Thumbs.db
 
-# Playwright
-playwright/.local-browsers/
-
-# Pytest
+# ===== Tests =====
 .pytest_cache/
-htmlcov/
 .coverage
+htmlcov/
+
+# ===== Jupyter =====
+.ipynb_checkpoints
