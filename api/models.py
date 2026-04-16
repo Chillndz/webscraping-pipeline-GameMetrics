@@ -2,7 +2,7 @@
 models.py — Modèles SQLAlchemy
 """
 
-from api.app import db
+from api.extensions import db
 
 
 class Game(db.Model):

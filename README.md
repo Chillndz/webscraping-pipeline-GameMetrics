@@ -1,269 +1,218 @@
-# 🎮 GameMetrics — Observatoire de la Popularité des Jeux Vidéo
-
-![Badge Niveau Or](https://img.shields.io/badge/Niveau-Or%20🥇-gold)
-![Python](https://img.shields.io/badge/Python-3.11-blue)
-![Scrapy](https://img.shields.io/badge/Scrapy-2.11-green)
-![Flask](https://img.shields.io/badge/Flask-3.0-lightgrey)
-![Docker](https://img.shields.io/badge/Docker-Compose-blue)
-
-> Projet de fin de module Web Scraping — ENSEA AS Data Science  
-> Enseignant : Dr N'golo Konate
+# 🎮 GameMetrics — Observatoire des Jeux Vidéo
+**ENSEA AS Data Science — Projet Web Scraping Pipeline**
 
 ---
 
-## 👥 Membres et Rôles
-
-| Membre | Rôle |
-|--------|------|
-| [Ndzana Boup Achille Emmanuel] | Data Engineer (Scraping + Nettoyage) |
-| [Lago Choeurtis] | Backend / DevOps (API + Docker + Celery + Monitoring) |
-
----
-
-## 📋 Description du Projet
-
-GameMetrics est un **pipeline complet de production** qui collecte, nettoie, stocke et expose des données sur la popularité des jeux vidéo entre **2024 et 2026** depuis Metacritic.
-
-### Thème
-> *Observatoire de la popularité des jeux vidéo basé sur notes critiques et avis utilisateurs*
-
-### Visualisations Power BI
-- Tendances : genres populaires 2024-2026
-- Comparaison notes critiques vs notes utilisateurs
-- Tableau interactif avec filtres par genre, plateforme, score
-
----
-
-## 🏗️ Architecture
+## 🗂️ Structure du projet
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    PIPELINE GAMEMETRICS                     │
-│                                                             │
-│  Metacritic ──► Scrapy+Playwright ──► raw_data.json         │
-│                                           │                 │
-│                                    clean_data.py            │
-│                                           │                 │
-│                                    clean_data.csv           │
-│                                           │                 │
-│                                    PostgreSQL               │
-│                                           │                 │
-│                                     Flask API               │
-│                                    /api/data                │
-│                                    /api/stats               │
-│                                    /api/scrape              │
-│                                           │                 │
-│                              Celery + Redis (async)         │
-│                              Celery Beat (planifié)         │
-│                                           │                 │
-│                           Prometheus + Grafana              │
-└─────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 🛠️ Technologies Utilisées
-
-| Composant | Technologie |
-|-----------|-------------|
-| Scraping | Scrapy 2.11 + Playwright (JS rendering) |
-| Nettoyage | pandas 2.2 |
-| Base de données | PostgreSQL 16 |
-| ORM | SQLAlchemy 2.0 |
-| API REST | Flask 3.0 + Flasgger (Swagger) |
-| Tâches async | Celery 5.3 + Redis 7 |
-| Planification | Celery Beat |
-| Monitoring | Prometheus + Grafana |
-| Conteneurisation | Docker + Docker Compose |
-| Tests | pytest |
-| Dashboard | Power BI Desktop |
-
----
-
-## 📁 Structure du Projet
-
-```
-GameMetrics/
+webscraping-pipeline-GameMetrics/
+├── .env                          ← Variables d'environnement (ne pas committer)
+├── docker-compose.yml
+├── import_to_db.py               ← Script d'import données → PostgreSQL
+├── requirements.txt              ← Dépendances Python locales
+├── requirements_docker.txt       ← Dépendances Python Docker
+│
+├── api/
+│   ├── __init__.py
+│   ├── app.py                    ← Flask + Swagger + Prometheus
+│   ├── models.py                 ← SQLAlchemy Game model
+│   └── routes.py                 ← 8 endpoints REST
+│
+├── tasks/
+│   ├── __init__.py
+│   └── celery_worker.py          ← 3 tâches Celery + Beat schedule
+│
 ├── scraper/
 │   ├── scrapy.cfg
-│   ├── clean_data.py          ← Nettoyage pandas
+│   ├── clean_data.py             ← Nettoyage pandas raw_data.json → clean_data.csv
 │   └── metacritic/
-│       ├── settings.py        ← Config Scrapy + reprise auto
-│       ├── pipelines.py       ← Filtres + écriture JSON
 │       ├── items.py
+│       ├── settings.py
+│       ├── pipelines.py
 │       └── spiders/
 │           └── metacritic_spider.py
-├── api/
-│   ├── app.py                 ← Flask application factory
-│   ├── models.py              ← Modèles SQLAlchemy
-│   └── routes.py              ← Endpoints REST
+│
 ├── database/
-│   └── init.sql               ← Schéma PostgreSQL + vues
-├── tasks/
-│   └── celery_worker.py       ← Tâches async + Beat schedule
-├── monitoring/
-│   └── prometheus.yml
+│   └── init.sql                  ← Schéma PostgreSQL + 3 vues
+│
 ├── docker/
 │   └── Dockerfile
-├── tests/
-│   └── test_clean_data.py     ← Tests pytest
-├── data/                      ← raw_data.json + clean_data.csv
-├── docker-compose.yml
-├── requirements.txt
-├── .env                       ← Variables d'environnement
-└── .gitignore
+│
+├── monitoring/
+│   ├── prometheus.yml            ← Config Prometheus (minuscule !)
+│   └── grafana/
+│       ├── provisioning/
+│       │   ├── datasources/datasources.yml   ← PostgreSQL + Prometheus
+│       │   └── dashboards/dashboards.yml
+│       └── dashboards/
+│           └── gamemetrics.json  ← Dashboard complet 16 panels
+│
+└── data/
+    ├── raw_data.json             ← Données brutes scraper
+    └── clean_data.csv            ← Données nettoyées
 ```
 
 ---
 
-## 🚀 Instructions d'Installation
+## 🚀 Étapes de lancement
 
-### Prérequis
-- Python 3.11+
-- Docker Desktop
-- Git
+### ÉTAPE 0 — Prérequis
+- Docker Desktop installé et démarré (baleine verte dans la barre des tâches)
+- Python 3.10+ avec environnement virtuel activé
 
-### 1. Cloner le repository
-```bash
-git clone https://github.com/[votre-groupe]/webscraping-pipeline-GameMetrics.git
-cd webscraping-pipeline-GameMetrics
-```
+### ÉTAPE 1 — Préparer l'environnement Python (une seule fois)
 
-### 2. Créer l'environnement virtuel
-```bash
+```powershell
+cd C:\Users\User\webscraping-pipeline-GameMetrics
+
+# Créer et activer l'environnement virtuel
 python -m venv venv
-# Windows
 venv\Scripts\activate
-# Mac/Linux
-source venv/bin/activate
-```
 
-### 3. Installer les dépendances
-```bash
+# Installer les dépendances locales
 pip install -r requirements.txt
-playwright install chromium
 ```
 
-### 4. Configurer les variables d'environnement
-```bash
-cp .env.example .env
-# Éditer .env avec vos valeurs
+### ÉTAPE 2 — Lancer l'infrastructure Docker
+
+```powershell
+# Depuis la racine du projet
+docker-compose up -d --build
 ```
+
+Attendre 30 secondes que PostgreSQL démarre, puis vérifier :
+
+```powershell
+docker-compose ps
+```
+
+Les 7 services doivent être `running` :
+```
+gamemetrics_db              ✅ running (healthy)
+gamemetrics_redis           ✅ running (healthy)
+gamemetrics_api             ✅ running
+gamemetrics_celery_worker   ✅ running
+gamemetrics_celery_beat     ✅ running
+gamemetrics_prometheus      ✅ running
+gamemetrics_grafana         ✅ running
+```
+
+### ÉTAPE 3 — Nettoyer les données
+
+```powershell
+# Depuis la racine du projet (pas depuis scraper/)
+python scraper/clean_data.py
+```
+
+Résultat attendu : création de `data/clean_data.csv`
+
+### ÉTAPE 4 — Importer les données dans PostgreSQL
+
+```powershell
+python import_to_db.py
+```
+
+Résultat attendu :
+```
+[OK] Connexion PostgreSQL établie (localhost:5432).
+[INFO] 250 lignes — nettoyage en cours...
+[OK] Import terminé — 250 jeux en base.
+```
+
+### ÉTAPE 5 — Accéder aux services
+
+| Service | URL | Identifiants |
+|---|---|---|
+| **API REST** | http://localhost:5000/api/data | — |
+| **Swagger** | http://localhost:5000/apidocs | — |
+| **Santé** | http://localhost:5000/health | — |
+| **Grafana** | http://localhost:3000 | admin / admin |
+| **Prometheus** | http://localhost:9090 | — |
 
 ---
 
-## 🕷️ Lancement du Scraping
+## 🔄 Commandes quotidiennes
 
-```bash
+### Démarrer le projet après extinction du PC
+
+```powershell
+cd C:\Users\User\webscraping-pipeline-GameMetrics
+venv\Scripts\activate
+docker-compose up -d
+# Attendre 30 secondes
+# Ouvrir http://localhost:3000
+```
+
+### Arrêter proprement
+
+```powershell
+docker-compose down
+```
+
+### Voir les logs d'un service
+
+```powershell
+docker logs gamemetrics_api --tail 50
+docker logs gamemetrics_grafana --tail 50
+```
+
+### Relancer un seul service
+
+```powershell
+docker-compose restart api
+docker-compose restart grafana
+```
+
+### Vérifier les données en base
+
+```powershell
+docker exec gamemetrics_db psql -U gamemetrics -d gamemetrics -c "SELECT COUNT(*) FROM games;"
+docker exec gamemetrics_db psql -U gamemetrics -d gamemetrics -c "SELECT title, platform, metascore FROM games ORDER BY metascore DESC LIMIT 5;"
+```
+
+### Lancer le scraping (local, hors Docker)
+
+```powershell
+venv\Scripts\activate
 cd scraper
 scrapy crawl metacritic
 ```
 
-**Reprise après pause** : relancer la même commande — Scrapy reprend automatiquement grâce au `JOBDIR`.
+---
 
-**Repartir de zéro** :
-```bash
-rm -rf scraper/.scrapy_jobs/metacritic/
-rm data/raw_data.json
+## 🧪 Tests API rapides
+
+```powershell
+# Stats globales
+curl http://localhost:5000/api/stats
+
+# Liste des jeux (page 1)
+curl http://localhost:5000/api/data
+
+# Filtrer par plateforme
+curl "http://localhost:5000/api/data?platform=pc&min_metascore=85"
+
+# Recherche par titre
+curl "http://localhost:5000/api/data/search?query=wukong"
+
+# Genres disponibles
+curl http://localhost:5000/api/genres
 ```
 
 ---
 
-## 🧹 Nettoyage des Données
+## 📊 Dashboard Grafana
 
-```bash
-python scraper/clean_data.py
-```
+Le dashboard **🎮 GameMetrics — Observatoire des Jeux Vidéo** s'ouvre automatiquement.
+Il contient 16 panels organisés en 6 sections :
 
-Produit `data/clean_data.csv` avec :
-- Dates standardisées (YYYY-MM-DD)
-- Scores validés (metascore 0-100, user_score 0-10)
-- Colonnes calculées : `release_year`, `score_gap`, `score_category`
+1. **Vue Globale** — 6 KPI cards (total jeux, Metascore moyen, User Score moyen, plateformes, genres, jeux excellents)
+2. **Genres & Plateformes** — Bar chart horizontal + Donut chart
+3. **Analyse des Scores** — Comparaison Metascore vs User Score par genre + distribution des catégories
+4. **Tendances Temporelles** — Courbe jeux par année et genre (Top 5)
+5. **Top Jeux** — Tableau Top 50 avec couleurs conditionnelles
+6. **Presse vs Utilisateurs** — Écart moyen par genre + pie chart catégories
+7. **Monitoring API** — Requêtes/min par endpoint + latence moyenne (Prometheus)
 
----
-
-## 🐳 Lancement Docker
-
-```bash
-# Démarrer tous les services
-docker-compose up -d
-
-# Vérifier les logs
-docker-compose logs -f api
-
-# Arrêter
-docker-compose down
-```
-
-### Services disponibles
-
-| Service | URL |
-|---------|-----|
-| API REST | http://localhost:5000/api/data |
-| Documentation Swagger | http://localhost:5000/apidocs |
-| Grafana | http://localhost:3000 |
-| Prometheus | http://localhost:9090 |
-| PostgreSQL | localhost:5432 |
-
----
-
-## 📡 Endpoints API
-
-| Méthode | Endpoint | Description |
-|---------|----------|-------------|
-| GET | `/api/data` | Liste paginée avec filtres |
-| GET | `/api/data/<id>` | Détail d'un jeu |
-| GET | `/api/data/search?query=...` | Recherche par titre |
-| GET | `/api/stats` | Statistiques globales |
-| POST | `/api/scrape` | Lance le scraping (sync) |
-| POST | `/api/scrape/async` | Lance le scraping (async) |
-| GET | `/api/scrape/status/<id>` | Statut d'une tâche |
-
-### Exemple de requête
-```bash
-# Jeux PS5 avec metascore > 80, page 1
-curl "http://localhost:5000/api/data?platform=ps5&min_metascore=80&page=1&limit=10"
-```
-
----
-
-## 🧪 Tests
-
-```bash
-pytest tests/ -v
-```
-
-Couverture des tests :
-- `remove_duplicates` — suppression des doublons
-- `standardize_dates` — standardisation des dates
-- `validate_scores` — validation des plages de scores
-- `clean_text_fields` — nettoyage des champs texte
-- `add_computed_columns` — colonnes calculées
-
----
-
-## 📊 Dashboard Power BI
-
-Connexion : PostgreSQL → `localhost:5432` → base `gamemetrics`
-
-Visualisations :
-1. **Barres** : genres populaires (nombre de jeux + score moyen)
-2. **Scatter plot** : Metascore vs User Score par genre
-3. **Tableau filtrable** : tous les jeux avec slicers genre/plateforme/score
-
----
-
-## ⚖️ Charte Éthique
-
-- ✅ `robots.txt` respecté
-- ✅ Délai de 3s entre chaque requête
-- ✅ User-Agent identifiable : Chrome 123 (navigateur standard)
-- ✅ Volume limité à 2000 items
-- ✅ Aucune donnée personnelle collectée
-- ✅ Site validé auprès de l'enseignant
-
----
-
-## 📬 Contact
-
-**Enseignant :** Dr N'golo Konate — konatengolo@ufhb.edu.ci
+3 filtres dynamiques : **Plateforme**, **Genre**, **Année**

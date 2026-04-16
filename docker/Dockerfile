@@ -1,27 +1,25 @@
+# =============================================================================
+# Dockerfile — API Flask + Celery Worker/Beat
+# =============================================================================
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Dépendances système pour Playwright et psycopg2
+# Dépendances système minimales
 RUN apt-get update && apt-get install -y \
     gcc \
     libpq-dev \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Dépendances Python
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Dépendances Python Docker
+COPY requirements_docker.txt .
+RUN pip install --no-cache-dir -r requirements_docker.txt
 
-# Installer le navigateur Playwright
-RUN playwright install chromium
-RUN playwright install-deps chromium
-
-# Copier le code
 COPY . .
 
 # Créer les dossiers nécessaires
-RUN mkdir -p data scraper/.scrapy_jobs
+RUN mkdir -p data
 
 EXPOSE 5000
 
