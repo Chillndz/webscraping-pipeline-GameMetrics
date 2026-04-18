@@ -55,7 +55,7 @@ webscraping-pipeline-GameMetrics/
 
 ---
 
-## 🚀 Étapes de lancement
+##  Étapes de lancement
 
 ### ÉTAPE 0 — Prérequis
 - Docker Desktop installé et démarré (baleine verte dans la barre des tâches)
@@ -213,6 +213,5 @@ Il contient 16 panels organisés en 6 sections :
 4. **Tendances Temporelles** — Courbe jeux par année et genre (Top 5)
 5. **Top Jeux** — Tableau Top 50 avec couleurs conditionnelles
 6. **Presse vs Utilisateurs** — Écart moyen par genre + pie chart catégories
-7. **Monitoring API** — Requêtes/min par endpoint + latence moyenne (Prometheus)
 
 3 filtres dynamiques : **Plateforme**, **Genre**, **Année**
